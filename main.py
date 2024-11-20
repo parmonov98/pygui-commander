@@ -84,27 +84,53 @@ class WindowController:
         return False
 
     def switch_to_window(self, window_type):
-        """Switch to a specific window type"""
+        """Switch to a specific window"""
         try:
-            # Update window positions first
-            self.update_window_positions()
+            window_id = self.windows.get(window_type)
+            if not window_id:
+                print(f"No {window_type} window ID found")
+                return False
+                
+            print(f"Switching to {window_type} window (ID: {window_id})")
             
-            # For terminal, verify it's responsive first
-            if window_type == 'terminal':
-                if not self.check_terminal_health():
-                    return False
-                    
-            if window_type in self.windows and self.windows[window_type]:
-                print(f"Switching to {window_type} window (ID: {self.windows[window_type]})")
-                subprocess.run(['wmctrl', '-i', '-a', self.windows[window_type]], check=True)
-                time.sleep(self.window_switch_delay)  # Longer delay after window switch
+            # First, make sure window is not minimized
+            subprocess.run(['wmctrl', '-i', '-r', window_id, '-b', 'remove,hidden,shaded'])
+            time.sleep(0.5)  # Wait for unminimize
+            
+            # Then activate it
+            result = subprocess.run(['wmctrl', '-i', '-a', window_id])
+            if result.returncode != 0:
+                print(f"Failed to switch to {window_type} window")
+                return False
+                
+            # Give window time to activate
+            time.sleep(0.5)
+            
+            # Get current active window title
+            active_title = subprocess.run(
+                ['xdotool', 'getwindowfocus', 'getwindowname'], 
+                capture_output=True, 
+                text=True
+            )
+            
+            # Get our window's title
+            window_title = subprocess.run(
+                ['xdotool', 'getwindowname', window_id],
+                capture_output=True,
+                text=True
+            )
+            
+            if (active_title.returncode == 0 and window_title.returncode == 0 and
+                active_title.stdout.strip() == window_title.stdout.strip()):
                 return True
                 
-            print(f"No {window_type} window found")
-            return False
+            # If titles don't match, try one more time
+            subprocess.run(['wmctrl', '-i', '-a', window_id])
+            time.sleep(0.5)
+            return True
             
         except Exception as e:
-            print(f"Error switching to {window_type}: {e}")
+            print(f"Error switching to {window_type} window: {e}")
             return False
 
     def update_window_positions(self):
@@ -155,7 +181,8 @@ class WindowController:
                 parts = line.split(None, 3)
                 if len(parts) >= 4:
                     window_id, desktop, host, title = parts
-                    if any(wt.lower() in title.lower() for wt in self.windsurf_titles):
+                    # Include any window that has "Windsurf" in the title
+                    if "Windsurf" in title:
                         windsurf_windows[window_id] = title
             
             if not windsurf_windows:
@@ -178,8 +205,10 @@ class WindowController:
                     idx = int(choice)
                     if 1 <= idx <= len(windsurf_windows):
                         chosen_id = list(windsurf_windows.keys())[idx-1]
+                        chosen_title = windsurf_windows[chosen_id]
                         self.windows['windsurf'] = chosen_id
-                        print(f"Selected: {windsurf_windows[chosen_id]}")
+                        print(f"\nSelected: {chosen_title}")
+                        
                         # Try switching to the window immediately to verify
                         if self.switch_to_window('windsurf'):
                             print("Successfully switched to window")
@@ -435,8 +464,13 @@ class WindowController:
                 if not output:
                     print("No output in clipboard")
                     return False
+                    
+                print("\nTest output captured:")
+                print("-" * 50)
+                print(output)
+                print("-" * 50)
                 
-                # Switch to selected Windsurf window
+                # Switch back to the selected Windsurf window
                 if not self.switch_to_window('windsurf'):
                     print("Could not switch to Windsurf window")
                     return False
@@ -474,7 +508,6 @@ class WindowController:
                 time.sleep(0.5)
                 
                 # Paste the output
-                pyperclip.copy(output)
                 pyautogui.hotkey('ctrl', 'v')
                 time.sleep(0.5)
                 
