@@ -59,9 +59,8 @@ The tool will:
 
 ```
 pygui-commander/
-├── main.py                 # Main entry point
+├── main.py                 # Main entry point and window management
 ├── input_detection.py      # Input box detection logic
-├── window_controller.py    # Window management
 ├── screenshots/            # Template and debug images
 │   ├── input.png          # Light theme template
 │   └── input_new.png      # Dark theme template
@@ -147,7 +146,7 @@ git push origin feature/my-new-feature
 
 ### Window Switching Issues
 
-1. Verify window titles in `window_controller.py`
+1. Verify window titles in `main.py`
 2. Check X11 window permissions
 3. Ensure xdotool is installed
 

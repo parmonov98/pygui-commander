@@ -38,7 +38,7 @@ class WindowController:
         print(f"Screenshots directory: {self.screenshots_dir}")
         
         # Window titles to look for
-        self.windsurf_titles = ["Windsurf", "window_controller.py", "xatp13.frontend2", "Cascade", "VSCodium"]
+        self.windsurf_titles = ["Windsurf", "xatp13.frontend2", "Cascade", "VSCodium"]
         self.terminal_titles = ["Terminal", "ubuntu@"]
         self.browser_titles = ["Chrome", "Firefox"]
         
