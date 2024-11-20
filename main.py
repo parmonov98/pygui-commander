@@ -49,10 +49,19 @@ class WindowController:
             'browser': None
         }
         
+        # Focus lock for window switching
+        self.focus_lock = {
+            'enabled': False,
+            'window_id': None,
+            'window_type': None,
+            'last_check': 0
+        }
+        
         # Timing configurations
         self.window_switch_delay = 1.0
         self.action_delay = 0.3
         self.command_delay = 1.5
+        self.focus_check_interval = 0.5  # How often to check focus
         
         # Configure PyAutoGUI
         pyautogui.FAILSAFE = True  # Move mouse to upper-left corner to abort
@@ -65,6 +74,17 @@ class WindowController:
         self.update_window_positions()
         
         self.debug = True
+
+    def _normalize_window_id(self, window_id):
+        """Normalize window ID to decimal format"""
+        try:
+            # Convert from hex (0x...) to decimal
+            if isinstance(window_id, str) and window_id.startswith('0x'):
+                return str(int(window_id, 16))
+            return str(window_id)
+        except Exception as e:
+            print(f"Error normalizing window ID: {e}")
+            return str(window_id)
 
     def check_terminal_health(self):
         """Check if terminal is healthy and responding"""
@@ -83,6 +103,64 @@ class WindowController:
             print("No terminal window found")
         return False
 
+    def enable_focus_lock(self, window_type):
+        """Enable focus lock for a specific window"""
+        window_id = self.windows.get(window_type)
+        if window_id:
+            self.focus_lock = {
+                'enabled': True,
+                'window_id': window_id,
+                'window_type': window_type,
+                'last_check': time.time()
+            }
+            print(f"Focus lock enabled for {window_type} window")
+            return True
+        return False
+
+    def disable_focus_lock(self):
+        """Disable focus lock"""
+        self.focus_lock = {
+            'enabled': False,
+            'window_id': None,
+            'window_type': None,
+            'last_check': 0
+        }
+        print("Focus lock disabled")
+
+    def check_and_restore_focus(self):
+        """Check if focus has been lost and restore it if necessary"""
+        try:
+            if not self.focus_lock['enabled']:
+                return True
+                
+            # Only check periodically to avoid too frequent checks
+            current_time = time.time()
+            if current_time - self.focus_lock['last_check'] < self.focus_check_interval:
+                return True
+                
+            self.focus_lock['last_check'] = current_time
+            
+            # Get current active window
+            active_window = subprocess.run(
+                ['xdotool', 'getactivewindow'],
+                capture_output=True,
+                text=True
+            )
+            
+            if active_window.returncode == 0:
+                active_id = self._normalize_window_id(active_window.stdout.strip())
+                locked_id = self._normalize_window_id(self.focus_lock['window_id'])
+                
+                if active_id != locked_id:
+                    print(f"Focus lost from {self.focus_lock['window_type']} window, restoring...")
+                    return self.switch_to_window(self.focus_lock['window_type'])
+                    
+            return True
+            
+        except Exception as e:
+            print(f"Error checking focus: {e}")
+            return False
+
     def switch_to_window(self, window_type):
         """Switch to a specific window"""
         try:
@@ -97,37 +175,52 @@ class WindowController:
             subprocess.run(['wmctrl', '-i', '-r', window_id, '-b', 'remove,hidden,shaded'])
             time.sleep(0.5)  # Wait for unminimize
             
-            # Then activate it
-            result = subprocess.run(['wmctrl', '-i', '-a', window_id])
-            if result.returncode != 0:
-                print(f"Failed to switch to {window_type} window")
-                return False
-                
-            # Give window time to activate
-            time.sleep(0.5)
+            # Then activate it using both wmctrl and xdotool for better reliability
+            subprocess.run(['wmctrl', '-i', '-a', window_id])
+            normalized_id = self._normalize_window_id(window_id)
+            subprocess.run(['xdotool', 'windowactivate', normalized_id])
+            time.sleep(self.window_switch_delay)  # Use configured delay
             
-            # Get current active window title
-            active_title = subprocess.run(
-                ['xdotool', 'getwindowfocus', 'getwindowname'], 
-                capture_output=True, 
-                text=True
-            )
-            
-            # Get our window's title
-            window_title = subprocess.run(
-                ['xdotool', 'getwindowname', window_id],
+            # Verify the switch was successful by checking active window
+            active_window = subprocess.run(
+                ['xdotool', 'getactivewindow'],
                 capture_output=True,
                 text=True
             )
             
-            if (active_title.returncode == 0 and window_title.returncode == 0 and
-                active_title.stdout.strip() == window_title.stdout.strip()):
-                return True
-                
-            # If titles don't match, try one more time
-            subprocess.run(['wmctrl', '-i', '-a', window_id])
-            time.sleep(0.5)
-            return True
+            if active_window.returncode == 0:
+                active_id = self._normalize_window_id(active_window.stdout.strip())
+                if active_id == normalized_id:
+                    print(f"Successfully switched to {window_type} window")
+                    # Enable focus lock for windsurf windows
+                    if window_type == 'windsurf':
+                        self.enable_focus_lock(window_type)
+                    return True
+            
+            # If verification failed, try one more time with xdotool
+            print(f"First switch attempt failed, trying again...")
+            subprocess.run(['xdotool', 'windowactivate', normalized_id])
+            time.sleep(self.window_switch_delay)
+            
+            active_window = subprocess.run(
+                ['xdotool', 'getactivewindow'],
+                capture_output=True,
+                text=True
+            )
+            
+            if active_window.returncode == 0:
+                active_id = self._normalize_window_id(active_window.stdout.strip())
+                if active_id == normalized_id:
+                    print(f"Successfully switched to {window_type} window on second attempt")
+                    # Enable focus lock for windsurf windows
+                    if window_type == 'windsurf':
+                        self.enable_focus_lock(window_type)
+                    return True
+            
+            print(f"Failed to switch to {window_type} window after retries")
+            print(f"Expected window ID: {normalized_id}")
+            print(f"Active window ID: {self._normalize_window_id(active_window.stdout.strip()) if active_window.returncode == 0 else 'unknown'}")
+            return False
             
         except Exception as e:
             print(f"Error switching to {window_type} window: {e}")
@@ -183,16 +276,20 @@ class WindowController:
                     window_id, desktop, host, title = parts
                     # Include any window that has "Windsurf" in the title
                     if "Windsurf" in title:
-                        windsurf_windows[window_id] = title
-            
+                        normalized_id = self._normalize_window_id(window_id)
+                        windsurf_windows[window_id] = {
+                            'title': title,
+                            'normalized_id': normalized_id
+                        }
+        
             if not windsurf_windows:
                 print("No Windsurf windows found")
                 return False
-                
+            
             print("\nAvailable Windsurf windows:")
-            for i, (wid, title) in enumerate(windsurf_windows.items(), 1):
-                print(f"{i}. {title}")
-                
+            for i, (wid, info) in enumerate(windsurf_windows.items(), 1):
+                print(f"{i}. {info['title']} (ID: {wid} -> {info['normalized_id']})")
+            
             while True:
                 try:
                     choice = input("\nChoose Windsurf window number (or 'q' to quit): ").strip()
@@ -201,13 +298,14 @@ class WindowController:
                     if choice.lower() == 'r':
                         print("\nRefreshing window list...")
                         return self.list_windsurf_windows()
-                        
+                    
                     idx = int(choice)
                     if 1 <= idx <= len(windsurf_windows):
                         chosen_id = list(windsurf_windows.keys())[idx-1]
-                        chosen_title = windsurf_windows[chosen_id]
+                        chosen_info = windsurf_windows[chosen_id]
                         self.windows['windsurf'] = chosen_id
-                        print(f"\nSelected: {chosen_title}")
+                        print(f"\nSelected: {chosen_info['title']}")
+                        print(f"Window ID: {chosen_id} (normalized: {chosen_info['normalized_id']})")
                         
                         # Try switching to the window immediately to verify
                         if self.switch_to_window('windsurf'):
@@ -220,7 +318,7 @@ class WindowController:
                         print("Invalid choice, try again or 'q' to quit, 'r' to refresh")
                 except ValueError:
                     print("Please enter a number, 'q' to quit, or 'r' to refresh")
-                    
+                
         except Exception as e:
             print(f"Error listing Windsurf windows: {e}")
             return False
@@ -418,6 +516,11 @@ class WindowController:
     def run_command_in_terminal(self):
         """Run the command specified in .env file in a new terminal"""
         try:
+            # Temporarily disable focus lock while running command
+            was_locked = self.focus_lock['enabled']
+            locked_type = self.focus_lock['window_type']
+            self.disable_focus_lock()
+            
             # Open new terminal
             subprocess.Popen(['gnome-terminal', '--', 'bash'], cwd=self.project_dir)
             time.sleep(2)  # Wait for terminal to open
@@ -442,6 +545,12 @@ class WindowController:
             # Close terminal
             pyautogui.write('exit')
             pyautogui.press('enter')
+            
+            # Restore focus lock if it was enabled
+            if was_locked:
+                time.sleep(1)  # Wait for terminal to close
+                self.enable_focus_lock(locked_type)
+                self.switch_to_window(locked_type)
             
             return True
         except Exception as e:
@@ -478,6 +587,9 @@ class WindowController:
                 print("Waiting for window switch...")
                 time.sleep(self.window_switch_delay)
                 
+                # Check focus periodically
+                self.check_and_restore_focus()
+                
                 # Take screenshot of Windsurf window
                 if not self.capture_window_screenshot(
                     self.windows['windsurf'],
@@ -507,9 +619,15 @@ class WindowController:
                 pyautogui.click(x, y)
                 time.sleep(0.5)
                 
+                # Check focus again before pasting
+                self.check_and_restore_focus()
+                
                 # Paste the output
                 pyautogui.hotkey('ctrl', 'v')
                 time.sleep(0.5)
+                
+                # Check focus one last time before pressing enter
+                self.check_and_restore_focus()
                 
                 # Press enter
                 pyautogui.press('enter')
@@ -553,7 +671,7 @@ class WindowController:
             if not window_info:
                 print("Could not get window info")
                 return False
-                
+            
             # Take screenshot
             screenshot = self.capture_window_screenshot(None)  # We don't need window_info anymore
             if screenshot is None:
